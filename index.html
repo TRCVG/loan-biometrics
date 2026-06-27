@@ -3,80 +3,133 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Loan Biometric Portal</title>
+  <title>Loan Camera Biometric Portal</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; text-align: center; background-color: #f0f2f5; }
-    .box { background: white; padding: 30px; border-radius: 12px; max-width: 350px; margin: 40px auto; border: 1px solid #ccc; }
-    button { background-color: #007bff; color: white; border: none; padding: 14px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
-    .status { margin-top: 20px; font-weight: bold; color: #555; }
-    .success { color: green; }
-    .error { color: red; }
+    body { font-family: sans-serif; padding: 15px; text-align: center; background-color: #f0f2f5; }
+    .box { background: white; padding: 20px; border-radius: 12px; max-width: 380px; margin: 20px auto; border: 1px solid #ccc; }
+    video, canvas { width: 100%; max-width: 340px; border-radius: 8px; background: #222; margin-top: 10px; }
+    button { background-color: #007bff; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 10px; }
+    .btn-capture { background-color: #28a745; }
+    .status { margin-top: 15px; font-weight: bold; color: #555; }
   </style>
 </head>
 <body>
 
   <div class="box">
-    <h2>Biometric Scan</h2>
-    <p>Tap the button below and scan your left thumb using your phone's sensor.</p>
+    <h2>Camera Thumbprint Capture</h2>
+    <p>Align your left thumb closely inside the camera view and hold steady under good light.</p>
     
-    <button onclick="openPhoneSensor()">Scan Left Thumb</button>
+    <video id="webcam" autoplay playsinline></video>
+    
+    <canvas id="process-canvas" style="display:none;"></canvas>
+    
+    <button id="start-cam-btn" onclick="startCamera()">1. Turn On Camera</button>
+    <button id="capture-btn" class="btn-capture" onclick="captureAndProcessThumb()" style="display:none;">2. Capture & Process Left Thumb</button>
     
     <div id="status-msg" class="status">System Ready</div>
   </div>
 
   <script>
-    async function openPhoneSensor() {
-      const statusDiv = document.getElementById("status-msg");
-      statusDiv.innerText = "Starting sensor...";
+    let videoStream = null;
 
-      // Check if browser supports fingerprint scanning
-      if (!window.PublicKeyCredential) {
-        statusDiv.className = "status error";
-        statusDiv.innerText = "Error: Browser does not support biometrics.";
-        return;
+    // Open smartphone rear camera
+    async function startCamera() {
+      const statusDiv = document.getElementById("status-msg");
+      const video = document.getElementById("webcam");
+      
+      try {
+        statusDiv.innerText = "Requesting camera access...";
+        
+        // Target the back camera specifically using 'environment'
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+        
+        video.srcObject = videoStream;
+        document.getElementById("start-cam-btn").style.display = "none";
+        document.getElementById("capture-btn").style.display = "block";
+        statusDiv.innerText = "Camera active. Place thumb close.";
+      } catch (err) {
+        statusDiv.innerText = "Camera error: " + err.message;
+        console.error(err);
+      }
+    }
+
+    // Capture the image frame and run threshold filters
+    function captureAndProcessThumb() {
+      const statusDiv = document.getElementById("status-msg");
+      const video = document.getElementById("webcam");
+      const canvas = document.getElementById("process-canvas");
+      const ctx = canvas.getContext("2d");
+
+      statusDiv.innerText = "Capturing frame...";
+
+      // Set canvas size matching the video dimensions
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Draw the exact video frame onto the canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Extract pixel matrix arrays
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+
+      // STEP 2 & 4: Quick local Grayscale & Threshold loop processing
+      for (let i = 0; i < data.length; i += 4) {
+        let r = data[i];
+        let g = data[i+1];
+        let b = data[i+2];
+        
+        // Convert pixel to grayscale
+        let grayscale = 0.299 * r + 0.587 * g + 0.114 * b;
+        
+        // Apply high threshold binarization (Enhance black ridges vs white skin valleys)
+        let binary = (grayscale < 110) ? 0 : 255; 
+        
+        data[i] = binary;     // Red
+        data[i+1] = binary;   // Green
+        data[i+2] = binary;   // Blue
       }
 
+      // Draw processed monochrome pixel data back to canvas
+      ctx.putImageData(imgData, 0, 0);
+      canvas.style.display = "block"; // Reveal the processed result
+      video.style.display = "none";   // Turn off live feed view
+
+      // Convert canvas picture to a base64 text string string
+      const fingerprintImageBase64 = canvas.toDataURL("image/png");
+
+      statusDiv.innerText = "Uploading processing image to Google Sheet...";
+      sendImageToBackend(fingerprintImageBase64);
+    }
+
+    async function sendImageToBackend(base64Str) {
+      const statusDiv = document.getElementById("status-msg");
+      const googleScriptUrl = "https://script.google.com/macros/s/AKfycbyBwpTytDXVmYX610v-xm6GADMse6V-utyPfVxPdtfj6joveTHBd6Df3DvrNh8ZyFbw/exec"; 
+
       try {
-        // Generate security codes required by the hardware
-        const challenge = new Uint8Array(32);
-        window.crypto.getRandomValues(challenge);
-
-        const options = {
-          challenge: challenge,
-          rp: { name: "Loan System", id: window.location.hostname },
-          user: { id: new Uint8Array([1,2,3,4]), name: "user@loan.com", displayName: "Applicant" },
-          pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-          authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-          timeout: 60000
-        };
-
-        statusDiv.innerText = "Touch your phone's fingerprint sensor now...";
-        
-        // This line forces the native mobile fingerprint pop-up window open
-        const credential = await navigator.credentials.create({ publicKey: options });
-
-        statusDiv.innerText = "Verified! Saving to Google Sheet...";
-
-        // 🔴 PASTE YOUR GOOGLE WEB APP URL INSIDE THE QUOTES BELOW:
-        const googleScriptUrl = "https://script.google.com/macros/s/AKfycbyBwpTytDXVmYX610v-xm6GADMse6V-utyPfVxPdtfj6joveTHBd6Df3DvrNh8ZyFbw/exec"; 
-
-        // Send the verification confirmation packet to our spreadsheet backend
         await fetch(googleScriptUrl, {
           method: "POST",
           mode: "no-cors",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            applicantEmail: "applicant@domain.com",
-            status: "THUMBPRINT_VERIFIED_SUCCESS"
+            applicantEmail: "camera_kyc@portal.com",
+            status: "CAMERA_RIDGE_IMAGE_SAVED",
+            imageData: base64Str // Sending the raw image string data over
           })
         });
 
-        statusDiv.className = "status success";
-        statusDiv.innerText = "✔ Fingerprint Verified & Sheet Updated!";
-
+        statusDiv.innerHTML = "<span style='color:green;'>✔ Image Transmitted & Sheet Logged!</span>";
+        if (videoStream) {
+          videoStream.getTracks().forEach(track => track.stop()); // Turn camera hardware off
+        }
       } catch (err) {
-        statusDiv.className = "status error";
-        statusDiv.innerText = "Scan failed or canceled.";
+        statusDiv.innerText = "Transmission failed.";
         console.error(err);
       }
     }
