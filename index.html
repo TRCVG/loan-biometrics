@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loan Biometric Portal</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; text-align: center; background-color: #f0f2f5; }
+    .box { background: white; padding: 30px; border-radius: 12px; max-width: 350px; margin: 40px auto; border: 1px solid #ccc; }
+    button { background-color: #007bff; color: white; border: none; padding: 14px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; }
+    .status { margin-top: 20px; font-weight: bold; color: #555; }
+    .success { color: green; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+
+  <div class="box">
+    <h2>Biometric Scan</h2>
+    <p>Tap the button below and scan your left thumb using your phone's sensor.</p>
+    
+    <button onclick="openPhoneSensor()">Scan Left Thumb</button>
+    
+    <div id="status-msg" class="status">System Ready</div>
+  </div>
+
+  <script>
+    async function openPhoneSensor() {
+      const statusDiv = document.getElementById("status-msg");
+      statusDiv.innerText = "Starting sensor...";
+
+      // Check if browser supports fingerprint scanning
+      if (!window.PublicKeyCredential) {
+        statusDiv.className = "status error";
+        statusDiv.innerText = "Error: Browser does not support biometrics.";
+        return;
+      }
+
+      try {
+        // Generate security codes required by the hardware
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+
+        const options = {
+          challenge: challenge,
+          rp: { name: "Loan System", id: window.location.hostname },
+          user: { id: new Uint8Array([1,2,3,4]), name: "user@loan.com", displayName: "Applicant" },
+          pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+          authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+          timeout: 60000
+        };
+
+        statusDiv.innerText = "Touch your phone's fingerprint sensor now...";
+        
+        // This line forces the native mobile fingerprint pop-up window open
+        const credential = await navigator.credentials.create({ publicKey: options });
+
+        statusDiv.innerText = "Verified! Saving to Google Sheet...";
+
+        // 🔴 PASTE YOUR GOOGLE WEB APP URL INSIDE THE QUOTES BELOW:
+        const googleScriptUrl = "https://script.google.com/macros/s/AKfycbyBwpTytDXVmYX610v-xm6GADMse6V-utyPfVxPdtfj6joveTHBd6Df3DvrNh8ZyFbw/exec"; 
+
+        // Send the verification confirmation packet to our spreadsheet backend
+        await fetch(googleScriptUrl, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            applicantEmail: "applicant@domain.com",
+            status: "THUMBPRINT_VERIFIED_SUCCESS"
+          })
+        });
+
+        statusDiv.className = "status success";
+        statusDiv.innerText = "✔ Fingerprint Verified & Sheet Updated!";
+
+      } catch (err) {
+        statusDiv.className = "status error";
+        statusDiv.innerText = "Scan failed or canceled.";
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>
